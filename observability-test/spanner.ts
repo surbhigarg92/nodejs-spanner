@@ -473,7 +473,7 @@ describe('EndToEnd', () => {
         database.formattedName_
       );
       await database.runTransactionAsync(async transaction => {
-        await transaction!.run('SELECT 1');
+        const [rows] = await transaction!.run('SELECT 1');
       });
 
       traceExporter.forceFlush();
