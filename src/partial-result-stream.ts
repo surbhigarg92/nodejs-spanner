@@ -604,7 +604,10 @@ export function partialResultStream(
       // If we get this error, the checkpoint stream has flushed any rows
       // it had queued. We can now destroy the user's stream, as our retry
       // attempts are over.
-      .on('error', (err: Error) => userStream.destroy(err))
+      .on('error', (err: Error) => 
+        {
+          userStream.destroy(err)
+        })
       .on('checkpoint', (row: google.spanner.v1.PartialResultSet) => {
         lastResumeToken = row.resumeToken;
       })

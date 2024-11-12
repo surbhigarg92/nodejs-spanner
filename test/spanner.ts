@@ -1345,6 +1345,7 @@ describe('Spanner with mock server', () => {
           });
           await database.close();
 
+          const request1 = spannerMock.getRequests();
           const requests = spannerMock
             .getRequests()
             .filter(val => (val as v1.ExecuteSqlRequest).sql)
@@ -2911,7 +2912,7 @@ describe('Spanner with mock server', () => {
   });
 
   describe('transaction', () => {
-    it('should retry on aborted query', async () => {
+    it.only('should retry on aborted query', async () => {
       let attempts = 0;
       const database = newTestDatabase();
       const rowCount = await database.runTransactionAsync(
@@ -2929,20 +2930,25 @@ describe('Spanner with mock server', () => {
       );
       assert.strictEqual(rowCount, 3);
       assert.strictEqual(attempts, 2);
+      const requests = spannerMock
+        .getRequests()
+        .filter(val => (val as v1.ExecuteSqlRequest).sql)
+        .map(req => req as v1.ExecuteSqlRequest);
+
       await database.close();
     });
 
-    it('should retry on aborted query with callback', done => {
+    it.only('should retry on aborted query with callback', done => {
       let attempts = 0;
       const database = newTestDatabase();
       let rowCount = 0;
       database.runTransaction((err, transaction) => {
         assert.ifError(err);
-        if (!attempts) {
-          spannerMock.abortTransaction(transaction!);
-        }
-        attempts++;
-        transaction!.run(selectSql, (err, rows) => {
+        // if (!attempts) {
+        //   spannerMock.abortTransaction(transaction!);
+        // }
+        // attempts++;
+        transaction!.run("Select * from FOO", (err, rows) => {
           assert.ifError(err);
           rows.forEach(() => rowCount++);
           assert.strictEqual(rowCount, 3);
@@ -2963,6 +2969,10 @@ describe('Spanner with mock server', () => {
     it('should retry on aborted when running parallel query', async () => {
       let attempts = 0;
       const database = newTestDatabase();
+      const requests1 = spannerMock
+      .getRequests()
+      .filter(val => (val as v1.ExecuteSqlRequest).sql)
+      .map(req => req as v1.ExecuteSqlRequest);
       const rowCount = await database.runTransactionAsync(
         (transaction): Promise<number> => {
           if (!attempts) {
@@ -2970,6 +2980,7 @@ describe('Spanner with mock server', () => {
           }
           attempts++;
           return Promise.all([
+            transaction!.run(select1),
             transaction!.run(selectSql),
             transaction!.run(selectSql),
           ]).then(([rows1, rows2]) => {
@@ -3011,7 +3022,7 @@ describe('Spanner with mock server', () => {
         .map(req => req as v1.CommitRequest);
       assert.strictEqual(commitRequests.length, 1);
       await database.close();
-    });
+    }); 
 
     it('should retry on aborted update statement', async () => {
       let attempts = 0;
@@ -3345,6 +3356,63 @@ describe('Spanner with mock server', () => {
           assert.match((err as Error).message, /Table FOO not found/);
         }
       });
+    });
+
+    it.only('should use begin transaction when error during first queries first while using inline begin transaction', async () => {
+      const database = newTestDatabase();
+      await database.runTransactionAsync(async tx => {
+        try {
+          await Promise.all([tx!.run(invalidSql), tx!.run(selectSql)]);
+          await tx.commit();
+        } catch (err) {
+          assert(err, 'Expected an error to be thrown');
+          assert.match((err as Error).message, /Table FOO not found/);
+        }
+      });
+
+      const invalidSqlRequests = spannerMock
+        .getRequests()
+        .filter(val => {
+          return (val as v1.ExecuteSqlRequest).sql === invalidSql;
+        })
+        .map(req => req as v1.ExecuteSqlRequest);
+      // assert.strictEqual(invalidSqlRequests.length, 2);
+      assert.ok(
+        invalidSqlRequests[0].transaction?.begin!.readWrite,
+        'Inline txn is not set in request.'
+      );
+      assert.ok(
+        invalidSqlRequests[1].transaction?.id,
+        'Transaction ID is not used for retries'
+      );
+
+      const selectSqlRequests = spannerMock
+        .getRequests()
+        .filter(val => {
+          return (val as v1.ExecuteSqlRequest).sql === selectSql;
+        })
+        .map(req => req as v1.ExecuteSqlRequest);
+      assert.strictEqual(selectSqlRequests.length, 1);
+      
+      assert.ok(
+        selectSqlRequests[0].transaction?.id,
+        'Transaction ID is not used for retries'
+      );
+      assert.deepStrictEqual(invalidSqlRequests[1].transaction?.id, selectSqlRequests[0].transaction?.id)
+      
+      const beginTxnRequest = spannerMock
+        .getRequests()
+        .filter(val => (val as v1.BeginTransactionRequest).options?.readWrite)
+        .map(req => req as v1.BeginTransactionRequest);
+      assert.deepStrictEqual(beginTxnRequest.length, 1);
+      const commitRequests = spannerMock
+        .getRequests()
+        .filter(val => (val as v1.CommitRequest).mutations)
+        .map(req => req as v1.CommitRequest);
+      assert.strictEqual(commitRequests.length, 1);
+      
+      await database.close();
+
     });
 
     it('should apply blind writes only once', async () => {

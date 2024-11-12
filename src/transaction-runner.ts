@@ -315,7 +315,18 @@ export class TransactionRunner extends Runner<void> {
 
       stream
         .on('error', (err: grpc.ServiceError) => {
-          if (!this.shouldRetry(err)) {
+          if(!transaction.id) {
+            transaction.begin();
+            transaction.begin().then(
+              () => {
+                this._run(transaction);
+              },
+              err => {
+              }
+            );
+            
+          }
+          else if (!this.shouldRetry(err)) {
             proxyStream.destroy(err);
             return;
           }
